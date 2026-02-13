@@ -2,7 +2,10 @@ import os
 import json
 import re
 import warnings
+from typing import Literal
+
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field, confloat
 
 from langchain_openai import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
@@ -10,13 +13,13 @@ from langchain.memory import ConversationBufferWindowMemory
 
 warnings.filterwarnings("ignore")
 
-# 🔐 Cargar variables desde el archivo .env
+# Cargar variables desde el archivo .env
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
-    raise ValueError("❌ No se encontró OPENAI_API_KEY en el archivo .env")
+    raise ValueError("No se encontró OPENAI_API_KEY en el archivo .env")
 
-# 🤖 Configuración del modelo vía OpenRouter
+# Configuración del modelo vía OpenRouter
 llm = ChatOpenAI(
     openai_api_base="https://openrouter.ai/api/v1",
     openai_api_key=os.environ["OPENAI_API_KEY"],
@@ -26,30 +29,33 @@ llm = ChatOpenAI(
 
 RESULT_FILE = "resultado.json"
 
-# Memoria (LangChain): guarda las últimas K interacciones (usuario/bot)
+# Memoria: guarda las últimas K interacciones (usuario/bot)
 memory = ConversationBufferWindowMemory(k=10, return_messages=True)
+
+
+# ----------------------------
+# Schema para salida estructurada (Pydantic)
+# ----------------------------
+class TypeProposal(BaseModel):
+    tipo: Literal["cluster", "series_tiempo", "preguntar"] = Field(
+        description="Clasificación del objetivo del usuario."
+    )
+    explicacion: str = Field(
+        description="En lenguaje sencillo, qué entendiste que quiere el usuario."
+    )
+    pregunta: str = Field(
+        default="",
+        description="Solo si tipo='preguntar'. Si no, string vacío."
+    )
+    confianza: confloat(ge=0.0, le=1.0) = Field(
+        default=0.0,
+        description="Confianza entre 0 y 1."
+    )
 
 
 # ----------------------------
 # Utilidades
 # ----------------------------
-def safe_json_extract(text: str):
-    text = text.strip()
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-
-    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-    if match:
-        candidate = match.group(0)
-        try:
-            return json.loads(candidate)
-        except Exception:
-            return None
-    return None
-
-
 def is_out_of_scope(text: str) -> bool:
     """
     Bloqueo simple: si el usuario se sale del contexto durante menús/preguntas,
@@ -128,7 +134,7 @@ def ask_menu(
 ) -> str:
     """
     Menú numerado con:
-    - recomendado (⭐) + explicación
+    - recomendado + explicación
     - soporte a: "no lo sé", "recomendado"
     - soporte a: pedir "ayuda/explicación" sin romper el flujo
     - bloqueo a salirse de contexto: repite la pregunta
@@ -145,35 +151,35 @@ def ask_menu(
         recommendation_reason = None
 
     if recommended and recommendation_reason:
-        print(f"\n🤖 Recomendación: {recommended}")
-        print(f"🤖 ¿Por qué? {recommendation_reason}")
+        print(f"\nRecomendación: {recommended}")
+        print(f"Motivo: {recommendation_reason}")
 
     while True:
         print("\n" + question)
         for i, opt in enumerate(options, start=1):
-            tag = " ⭐ recomendado" if opt == recommended else ""
+            tag = " (recomendado)" if opt == recommended else ""
             print(f"  {i}) {opt}{tag}")
 
-        user = input("👉 Elige un número (o escribe 'recomendado' / 'ayuda'): ").strip().lower()
+        user = input("Elige un número (o escribe 'recomendado' / 'ayuda'): ").strip().lower()
 
         if user in ["salir", "exit", "quit"]:
             raise SystemExit
 
         # Bloqueo fuera de contexto
         if is_out_of_scope(user):
-            print("🤖 Solo puedo ayudarte a configurar el modelo/JSON. Para avanzar necesito una opción del menú.")
+            print("Solo puedo ayudarte a configurar el modelo/JSON. Para avanzar necesito una opción del menú.")
             continue
 
         # Ayuda/explicación
         help_text = explain_options(user, options)
         if help_text:
             print("\n" + help_text)
-            print("\n👉 Ahora elige una opción del menú (o escribe 'recomendado').")
+            print("\nAhora elige una opción del menú (o escribe 'recomendado').")
             continue
 
         # "no lo sé" -> recomendado
         if allow_recommend_phrases and user in recommend_phrases:
-            print(f"🤖 Ok, uso el recomendado: {recommended}")
+            print(f"Ok, uso el recomendado: {recommended}")
             return recommended
 
         # número
@@ -187,7 +193,7 @@ def ask_menu(
             if user == opt.lower():
                 return opt
 
-        print("❌ Opción inválida. Escribe un número del menú o 'recomendado'.")
+        print("Opción inválida. Escribe un número del menú o 'recomendado'.")
 
 
 def ask_yes_no(question: str) -> bool:
@@ -198,9 +204,9 @@ def ask_yes_no(question: str) -> bool:
         if ans in ["no", "n"]:
             return False
         if is_out_of_scope(ans):
-            print("🤖 Para avanzar necesito 'sí' o 'no'.")
+            print("Para avanzar necesito 'sí' o 'no'.")
             continue
-        print("❌ Responde 'sí' o 'no'.")
+        print("Responde 'sí' o 'no'.")
 
 
 def ask_int_in_range(question: str, min_v: int, max_v: int) -> int:
@@ -209,13 +215,13 @@ def ask_int_in_range(question: str, min_v: int, max_v: int) -> int:
         if user in ["salir", "exit", "quit"]:
             raise SystemExit
         if is_out_of_scope(user):
-            print("🤖 Solo puedo ayudarte a configurar el modelo/JSON. Para avanzar necesito un número.")
+            print("Solo puedo ayudarte a configurar el modelo/JSON. Para avanzar necesito un número.")
             continue
         if user.isdigit():
             v = int(user)
             if min_v <= v <= max_v:
                 return v
-        print("❌ Valor inválido. Intenta de nuevo.")
+        print("Valor inválido. Intenta de nuevo.")
 
 
 def get_recent_memory_messages():
@@ -236,8 +242,8 @@ def pick_or_ask(
     """
     if user_level == "no_tecnico":
         print("\n" + question)
-        print(f"🤖 Voy a elegir por ti: {recommended}")
-        print(f"🤖 Motivo: {reason}")
+        print(f"Voy a elegir por ti: {recommended}")
+        print(f"Motivo: {reason}")
         return recommended
 
     return ask_menu(
@@ -249,41 +255,37 @@ def pick_or_ask(
 
 
 # ----------------------------
-# Router con memoria (propuesta + explicación + pregunta)
+# Router con memoria (schema + explicación + pregunta)
 # ----------------------------
 def propose_type_with_explanation() -> dict:
     system = SystemMessage(
         content=(
             "Eres un asistente enfocado SOLO en configurar JSONs para modelos de ML.\n"
             "Si el usuario se sale del tema, debes volver a encauzar preguntando sobre el objetivo.\n"
-            "Responde SOLO con un JSON válido (sin texto adicional).\n\n"
+            "Devuelve la respuesta siguiendo el esquema solicitado.\n\n"
             "Clases:\n"
             '- "cluster": AGRUPAR cosas similares.\n'
             '- "series_tiempo": PREDECIR valores futuros en el tiempo.\n'
-            '- "preguntar": si no está claro; devuelve UNA pregunta corta.\n\n'
-            "Incluye una explicación MUY sencilla para que el usuario confirme."
+            '- "preguntar": si no está claro; devuelve UNA pregunta corta.\n'
         )
     )
 
     prompt = HumanMessage(
-        content=(
-            "Con base en la conversación, decide el tipo.\n"
-            "Formato obligatorio:\n"
-            '{\n'
-            '  "tipo": "cluster|series_tiempo|preguntar",\n'
-            '  "explicacion": "En lenguaje sencillo, qué entendiste que quiere el usuario",\n'
-            '  "pregunta": "Solo si tipo=preguntar, si no vacio",\n'
-            '  "confianza": 0.0\n'
-            "}\n"
-        )
+        content="Con base en la conversación, decide el tipo y completa el schema."
     )
 
     history = get_recent_memory_messages()
-    resp = llm.invoke([system] + history + [prompt])
-    content = getattr(resp, "content", str(resp))
-    data = safe_json_extract(content)
 
-    if not isinstance(data, dict):
+    # Salida estructurada con schema
+    structured_llm = llm.with_structured_output(
+        schema=TypeProposal,
+        method="json_schema",   # si tu backend falla con esto, prueba "function_calling"
+        include_raw=False
+    )
+
+    try:
+        proposal: TypeProposal = structured_llm.invoke([system] + history + [prompt])
+    except Exception:
         return {
             "tipo": "preguntar",
             "explicacion": "No estoy seguro de si quieres agrupar cosas similares o predecir valores en el tiempo.",
@@ -291,22 +293,13 @@ def propose_type_with_explanation() -> dict:
             "confianza": 0.0,
         }
 
-    tipo = data.get("tipo", "preguntar")
-    if tipo not in ["cluster", "series_tiempo", "preguntar"]:
-        tipo = "preguntar"
-
-    explicacion = str(data.get("explicacion", "")).strip()
-    pregunta = str(data.get("pregunta", "")).strip() if tipo == "preguntar" else ""
-    try:
-        confianza = float(data.get("confianza", 0.0))
-    except Exception:
-        confianza = 0.0
+    pregunta = proposal.pregunta.strip() if proposal.tipo == "preguntar" else ""
 
     return {
-        "tipo": tipo,
-        "explicacion": explicacion,
+        "tipo": proposal.tipo,
+        "explicacion": proposal.explicacion.strip(),
         "pregunta": pregunta,
-        "confianza": max(0.0, min(1.0, confianza)),
+        "confianza": float(proposal.confianza),
     }
 
 
@@ -351,7 +344,7 @@ SERIES_OPTIONS = {
 def fill_cluster(user_level: str):
     cfg = dict(CLUSTER_SCHEMA)
 
-    print("\n🧩 Configuración de CLUSTERING (agrupar elementos similares).")
+    print("\nConfiguración de CLUSTERING (agrupar elementos similares).")
 
     cfg["objetivo"] = pick_or_ask(
         "¿Qué quieres lograr?",
@@ -412,7 +405,7 @@ def fill_cluster(user_level: str):
 def fill_series(user_level: str):
     cfg = dict(SERIES_SCHEMA)
 
-    print("\n📈 Configuración de SERIES DE TIEMPO (predecir futuro con historial).")
+    print("\nConfiguración de SERIES DE TIEMPO (predecir futuro con historial).")
 
     cfg["frecuencia"] = pick_or_ask(
         "¿Con qué frecuencia están tus datos?",
@@ -476,7 +469,7 @@ def explain_solution(cfg: dict) -> str:
 # ----------------------------
 # Chat principal (nivel -> entender -> confirmar -> llenar -> guardar)
 # ----------------------------
-print("💬 Asistente para crear configuración JSON de ML (escribe 'salir' para terminar)\n")
+print("Asistente para crear configuración JSON de ML (escribe 'salir' para terminar)\n")
 
 state = "nivel"
 chosen_type = None
@@ -484,7 +477,7 @@ user_level = None
 
 while True:
     if state == "nivel":
-        print("👋 Antes de empezar, una pregunta rápida:")
+        print("Antes de empezar, una pregunta rápida:")
         user_level = ask_menu(
             "¿Tienes conocimiento técnico en Machine Learning?",
             ["no_tecnico", "tecnico"],
@@ -495,9 +488,9 @@ while True:
         continue
 
     if state == "entender":
-        user_input = input("👤 Cuéntame tu problema (ej: 'segmentar clientes' o 'predecir ventas'): ").strip()
+        user_input = input("Cuéntame tu problema (ej: 'segmentar clientes' o 'predecir ventas'): ").strip()
         if user_input.lower() in ["salir", "exit", "quit"]:
-            print("👋 Hasta luego.")
+            print("Hasta luego.")
             break
 
         # Guardar en memoria
@@ -509,15 +502,15 @@ while True:
 
             if proposal["tipo"] == "preguntar":
                 q = proposal["pregunta"] or "¿Quieres agrupar elementos similares o predecir valores futuros en el tiempo?"
-                print("\n🤖 Necesito una aclaración corta:")
-                print("🤖 " + q)
-                ans = input("👤 Respuesta: ").strip()
+                print("\nNecesito una aclaración corta:")
+                print(q)
+                ans = input("Respuesta: ").strip()
                 if ans.lower() in ["salir", "exit", "quit"]:
-                    print("👋 Hasta luego.")
+                    print("Hasta luego.")
                     raise SystemExit
 
                 if is_out_of_scope(ans):
-                    print("🤖 Solo puedo ayudarte a configurar el modelo/JSON. Responde la pregunta para avanzar.")
+                    print("Solo puedo ayudarte a configurar el modelo/JSON. Responde la pregunta para avanzar.")
                     continue
 
                 memory.chat_memory.add_user_message(ans)
@@ -528,10 +521,10 @@ while True:
                 ("agrupar cosas similares (clustering)." if proposal["tipo"] == "cluster" else "predecir valores futuros (series de tiempo).")
             )
 
-            print("\n🤖 Entendí esto (dime si es correcto):")
-            print("🤖 " + explanation)
+            print("\nEntendí esto (dime si es correcto):")
+            print(explanation)
 
-            ok = ask_yes_no("👉 ¿Es correcto?")
+            ok = ask_yes_no("¿Es correcto?")
             memory.chat_memory.add_ai_message("Entendí: " + explanation)
 
             if ok:
@@ -539,14 +532,14 @@ while True:
                 state = "llenar"
                 break
 
-            print("\n🤖 Perfecto. Dímelo en una frase (solo lo relacionado con el objetivo):")
-            correction = input("👤 ¿Qué quieres lograr exactamente?: ").strip()
+            print("\nPerfecto. Dímelo en una frase (solo lo relacionado con el objetivo):")
+            correction = input("¿Qué quieres lograr exactamente?: ").strip()
             if correction.lower() in ["salir", "exit", "quit"]:
-                print("👋 Hasta luego.")
+                print("Hasta luego.")
                 raise SystemExit
 
             if is_out_of_scope(correction):
-                print("🤖 Solo puedo ayudarte con la configuración del modelo. Por favor describe el objetivo.")
+                print("Solo puedo ayudarte con la configuración del modelo. Por favor describe el objetivo.")
                 continue
 
             memory.chat_memory.add_user_message(correction)
@@ -568,7 +561,7 @@ while True:
         with open(RESULT_FILE, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
 
-        print(f"\n✅ Listo. Generé el archivo interno: {RESULT_FILE}")
-        print("\n🧠 Así se resolverá tu problema (en sencillo):")
-        print("🤖 " + explain_solution(cfg) + "\n")
+        print(f"\nListo. Generé el archivo interno: {RESULT_FILE}")
+        print("\nAsí se resolverá tu problema (en sencillo):")
+        print(explain_solution(cfg) + "\n")
         break
